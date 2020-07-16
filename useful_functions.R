@@ -20,7 +20,7 @@ library(reshape2)
 # Returns only those states, that have non-zero probability
 non_zero <- function(df) {
   df <- df %>% as.data.frame()
-  return(df[which(abs(df) > 0.001)])
+  return(df[which(abs(df) > 0.0001)])
 }
 
 # Makes the measurement on given register on given qubit
@@ -49,7 +49,10 @@ M <- function(df, bit_num = 1, times = 1) {
 # Returns the square of the coefficients of the states - probabilities to
 # be measured
 probs <- function(df) {
-  df^2
+  sq <- function(d) {
+    d^2
+  }
+  return(df %>% non_zero() %>% t %>% Mod %>% sq %>% t %>% as.data.frame())
 }
 
 # Generates an even/odd function configuration for the oracle_function
@@ -59,6 +62,7 @@ generate_conf <- function(size, even = T) {
   n <- 2^size
   first <- sample(0:1, n/2, replace = T)
   configuration <- c(first, rev((first + even + 1) %% 2))
+  print(configuration)
   return(configuration)
 }
 
@@ -69,6 +73,7 @@ random_conf <- function(size) {
   n <- 2^size
   first <- sample(0:1, n, replace = T)
   configuration <- first
+  # print(configuration)
   return(configuration)
 }
 
@@ -264,7 +269,7 @@ evennes_check <- function(configuration) {
   res <- state("111") %M%
     H(3) %M%                # hadamard all 3 qubits
     func %M%                # evaluate function
-    (CX(1,2) %x% I()) %M%    # C_Not the input qubits
+    (CX(1,2) %x% I()) %M%   # C_Not the input qubits
     (H(2) %x% I())          # hadamard input qubits
   
   # measuring the first qubit
@@ -279,16 +284,19 @@ test(check)
 test(evennes_check)
 
 # the CNOT cascade part of the algorithm for general case
-CX_Cascade <- function(n) {
+CX_Cascade <- function(n = 3) {
+  if(n == 2) {
+    return(CX())
+  }
   if(n == 3) {
-    return((CX() %x% I()) %M% H(n))
+    return((CX() %x% I()))
   }
   result <- CX(1, 2) %x% I(n - 2)
   for (i in (n-3):1) {
     result <- result %M%
       (CX(control = 1, target = n-i) %x% I(i))
   }
-  result <- result %M% H(n)
+  result <- result
   return(result)
 }
 
@@ -300,8 +308,48 @@ KH <- function(n, f) {
     state() %M%
     H(n+1) %M%
     oracle_function(f) %M%
-    CX_Cascade(n+1) %>%
+    CX_Cascade(n+1) %M%
+    H(n+1)%>%
     non_zero()
+}
+
+new_algorithm <- function(conf) {
+  n <- (log(length(conf)) / log(2))
+  if(n%%1 != 0) return(-1)
+  else {
+    foo <- function(num, f) {
+      A <- function(number) {
+        CX_Cascade(number) %M%
+          (H() %x% I(number-1)) %M%
+          CX_Cascade(number)
+      }
+      return((H() %x% I(num-1)) %M%
+               oracle_function(f) %M%
+               A(num) %M%
+               oracle_function(f))
+    }
+    
+    B <- function(num, N) {
+      (X() %x% I(N-1)) %M%
+        (CX(1, num) %x% I(N-num)) %M%
+        (X() %x% I(N-1))
+    }
+    
+    FUNC <- foo(n+1, conf)
+    res <- c(matrix(0, nrow = 1, ncol = n), 1) %>%
+      paste(collapse = "") %>%
+      state() %M%
+      (I() %x% H(n)) %M%
+      FUNC
+    
+    for(i in 2:(n-1)) {
+      res <- res %M%
+        B(i, n+1) %M%
+        FUNC
+    }
+    
+    return(res)
+  }
 }
 
 # A function, that draws all possible states with their 
@@ -340,12 +388,12 @@ accuracy <- function(t) {
 }
 
 # The probability of given qubit in the register to be
-# measured 0
+# measured 1
 nth_qubit_prob <- function(df, n = 1) {
   which(df %>%
           non_zero() %>%
           colnames() %>%
-          substring(n,n) == "0") -> indices
+          substring(n,n) == "1") -> indices
   if(length(indices) != 0) {
     df %>%
       non_zero() %>%
